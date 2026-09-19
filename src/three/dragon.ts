@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { TAU, clamp, lerp, sstep, smoother, damp } from "./utils";
+import { TAU, clamp, lerp, sstep, smoother, damp, hash } from "./utils";
 import {
   SPINE_N,
   morphT,
@@ -59,6 +59,11 @@ export function bodyRadius(u: number): number {
   }
   // muzzle junction closes gently toward the head
   r *= 0.72 + 0.28 * sstep(0, 0.02, u);
+  // rib-like muscular ripple (~2.5% amplitude, frequency matches bone count)
+  // tapers off toward the tail tip so the thin whip end stays clean
+  const ribFreq = 44; // matches typical bone count
+  const ribAmp = 0.025 * (1 - sstep(0.75, 1.0, u));
+  r *= 1.0 + Math.sin(u * ribFreq * Math.PI) * ribAmp;
   return r;
 }
 
@@ -201,6 +206,21 @@ function setSkin(geo: THREE.BufferGeometry, bone: number) {
   for (let i = 0; i < n; i++) {
     si[i * 4] = bone;
     sw[i * 4] = 1;
+  }
+  geo.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(si, 4));
+  geo.setAttribute("skinWeight", new THREE.Float32BufferAttribute(sw, 4));
+}
+
+/** two-bone blended skinning for geometry that follows the spine between bones */
+function setSkin2(geo: THREE.BufferGeometry, bone0: number, bone1: number, w0: number, w1: number) {
+  const n = geo.attributes.position.count;
+  const si = new Uint16Array(n * 4);
+  const sw = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    si[i * 4] = bone0;
+    si[i * 4 + 1] = bone1;
+    sw[i * 4] = w0;
+    sw[i * 4 + 1] = w1;
   }
   geo.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(si, 4));
   geo.setAttribute("skinWeight", new THREE.Float32BufferAttribute(sw, 4));
@@ -477,10 +497,13 @@ export class Dragon {
     bodyMesh.frustumCulled = false;
     this.group.add(bodyMesh);
 
-    /* ---------------- dorsal fin ridge ---------------- */
+    /* ---------------- dorsal spike crest (multi-faceted, irregular heights) ---- */
     const finParts: THREE.BufferGeometry[] = [];
     us.forEach((u, j) => {
-      const blade = this.finBlade();
+      // irregular height variation ±18% between adjacent spikes
+      const heightVar = 1.0 + (hash(j * 37 + 11) - 0.5) * 0.36;
+      const blade = this.finBlade(j);
+      blade.scale(1, heightVar, 1);
       const g = prep(blade, "#e8c877", u, F0 + j);
       spineColor(u, _c1);
       const colAttr = g.attributes.color as THREE.BufferAttribute;
@@ -494,6 +517,99 @@ export class Dragon {
     const finMesh = new THREE.SkinnedMesh(finGeo, bodyMat);
     finMesh.frustumCulled = false;
     this.group.add(finMesh);
+
+    /* ---------------- secondary spike rows (flank + skull cluster + tail serrations) ---- */
+    const spikeParts: THREE.BufferGeometry[] = [];
+
+    // (a) lateral flank spikes — two rows per side, smaller, angled outward
+    const nFlank = Math.max(6, Math.floor(q.fins * 0.6));
+    for (let j = 0; j < nFlank; j++) {
+      const u = 0.06 + (j / (nFlank - 1)) * 0.68;
+      const r = bodyRadius(u);
+      for (const side of [-1, 1]) {
+        const seed = j * 100 + (side > 0 ? 50 : 0) + 200;
+        const heightVar = 1.0 + (hash(seed * 7 + 3) - 0.5) * 0.3;
+        const spike = this.finBlade(seed);
+        const flankH = (0.06 + 0.04 * (1 - u)) * heightVar;
+        spike.scale(0.6, flankH / 0.16, 0.6); // smaller than dorsal
+        // position at ±55° from dorsal (dorsal = +Y)
+        const angle = side * 0.96; // ~55 degrees in radians
+        const px = Math.sin(angle) * r * 0.76;
+        const py = Math.cos(angle) * r * 0.76;
+        const g = spike;
+        if (g.index) g.toNonIndexed();
+        setColorAttr(g, "#d4a84a");
+        spineColor(u, _c1);
+        const ca = g.attributes.color as THREE.BufferAttribute;
+        for (let i = 0; i < ca.count; i++) {
+          ca.setXYZ(i, _c1.r * 0.55 + 0.4, _c1.g * 0.55 + 0.3, _c1.b * 0.45 + 0.1);
+        }
+        setScalarAttr(g, "aU", u);
+        // skin to nearest body bone pair
+        const fb = u * (q.bones - 1);
+        const b0 = Math.min(q.bones - 2, Math.floor(fb));
+        const w1 = fb - b0;
+        setSkin2(g, b0, b0 + 1, 1 - w1, w1);
+        g.applyMatrix4(mat4(px, py, -u * BODY_LEN, 0, 0, side * 0.45));
+        spikeParts.push(g);
+      }
+    }
+
+    // (b) skull / neck cluster — dense short spikes at the back of the skull
+    const nSkull = 10;
+    for (let i = 0; i < nSkull; i++) {
+      const angle = (i / (nSkull - 1) - 0.5) * 2.4; // spread across the crown
+      const seed = i + 500;
+      const spike = this.finBlade(seed);
+      const h = 0.04 + hash(seed * 11 + 1) * 0.05;
+      spike.scale(0.45, h / 0.16, 0.45);
+      const g = spike;
+      if (g.index) g.toNonIndexed();
+      setColorAttr(g, "#e3b95f");
+      setScalarAttr(g, "aU", 0.02);
+      setSkin(g, HEAD);
+      // position across the back crown of the skull
+      const cx = Math.sin(angle) * 0.18;
+      const cy = 0.12 + Math.cos(angle) * 0.08;
+      const cz = -0.12 - Math.abs(Math.sin(angle)) * 0.06;
+      g.applyMatrix4(mat4(cx, cy, cz, -0.3 + hash(seed * 3) * 0.2, 0, angle * 0.15));
+      spikeParts.push(g);
+    }
+
+    // (c) tail serrations — fine small spikes along the last 15% of the tail
+    const nSerr = Math.max(8, Math.floor(q.fins * 0.5));
+    for (let j = 0; j < nSerr; j++) {
+      const u = 0.86 + (j / (nSerr - 1)) * 0.12;
+      const r = bodyRadius(u);
+      const seed = j + 700;
+      const spike = this.finBlade(seed);
+      // progressively smaller toward the tip
+      const taper = 1 - (j / (nSerr - 1)) * 0.6;
+      const h = (0.025 + hash(seed * 13 + 5) * 0.02) * taper;
+      spike.scale(0.35, h / 0.16, 0.35);
+      const g = spike;
+      if (g.index) g.toNonIndexed();
+      setColorAttr(g, "#c9a040");
+      spineColor(u, _c1);
+      const ca2 = g.attributes.color as THREE.BufferAttribute;
+      for (let i = 0; i < ca2.count; i++) {
+        ca2.setXYZ(i, _c1.r * 0.5 + 0.3, _c1.g * 0.5 + 0.2, _c1.b * 0.4 + 0.1);
+      }
+      setScalarAttr(g, "aU", u);
+      const fb = u * (q.bones - 1);
+      const b0 = Math.min(q.bones - 2, Math.floor(fb));
+      const w1 = fb - b0;
+      setSkin2(g, b0, b0 + 1, 1 - w1, w1);
+      g.applyMatrix4(mat4(0, r * 0.78, -u * BODY_LEN));
+      spikeParts.push(g);
+    }
+
+    if (spikeParts.length > 0) {
+      const spikeGeo = mergeGeometries(spikeParts, false)!;
+      const spikeMesh = new THREE.SkinnedMesh(spikeGeo, bodyMat);
+      spikeMesh.frustumCulled = false;
+      this.group.add(spikeMesh);
+    }
 
     /* ---------------- head ---------------- */
     const headMesh = new THREE.SkinnedMesh(this.buildHeadGeometry(HEAD), headMat);
@@ -611,15 +727,28 @@ export class Dragon {
         const th = (j / radial) * TAU;
         const cx = Math.cos(th);
         const sy = Math.sin(th);
-        // slightly elliptical cross-section, belly flattened
-        const ex = cx * r;
-        const ey = sy * r * (0.93 + 0.07 * sy);
-        pos[v * 3] = ex;
-        pos[v * 3 + 1] = ey;
+        // asymmetric elliptical cross-section:
+        //  - ventral (belly, sy < 0) compressed to ~82% of radius
+        //  - dorsal (back, sy > 0) full radius with slight keel bulge
+        //  - dorsal fin root ridge/valley break near th ≈ π/2 (top)
+        const ventralFactor = sy < 0 ? (0.82 + 0.18 * (1 - sy * sy)) : 1.0;
+        const dorsalBulge = sy > 0.7 ? 1.0 + 0.035 * Math.pow((sy - 0.7) / 0.3, 2) : 1.0;
+        // narrow ridge/valley at the dorsal fin root (top of the body)
+        const topness = Math.max(0, sy - 0.85) / 0.15; // 0..1 near the crown
+        const ridgeBreak = 1.0 - topness * 0.06 + topness * topness * 0.09; // dip then bump
+        const rx = cx * r;
+        const ry = sy * r * ventralFactor * dorsalBulge * ridgeBreak;
+        pos[v * 3] = rx;
+        pos[v * 3 + 1] = ry;
         pos[v * 3 + 2] = -u * BODY_LEN;
-        const nl = Math.hypot(cx, sy / 0.93);
-        nrm[v * 3] = cx / nl;
-        nrm[v * 3 + 1] = sy / 0.93 / nl;
+        // analytically-adjusted normals for the elliptical shape
+        const invRx = 1.0; // x scale factor is 1 (unchanged)
+        const invRy = 1.0 / (ventralFactor * dorsalBulge * ridgeBreak);
+        const nnx = cx * invRx;
+        const nny = sy * invRy;
+        const nl = Math.hypot(nnx, nny);
+        nrm[v * 3] = nnx / nl;
+        nrm[v * 3 + 1] = nny / nl;
         nrm[v * 3 + 2] = 0;
         col[v * 3] = _c1.r * dim;
         col[v * 3 + 1] = _c1.g * dim;
@@ -651,64 +780,268 @@ export class Dragon {
     return g;
   }
 
-  /* ---------------- carved dorsal blade (unit height, scaled by bone) ---------------- */
-  private finBlade(): THREE.BufferGeometry {
-    const b0 = [-0.02, 0, 0.16];
-    const b1 = [0.02, 0, 0.16];
-    const b2 = [0, 0, -0.13];
-    const tip = [0, 1.0, -0.26];
-    const faces = [
-      [b0, b1, tip],
-      [b1, b2, tip],
-      [b2, b0, tip],
-      [b0, b2, b1],
+  /* ---------------- multi-faceted dorsal spike (replaces old flat-triangle blade) ---- */
+  /**
+   * Tapered, twisted, faceted spike with ridged asymmetric cross-section.
+   * 6 radial sides × 5 height rings → 144 vertices (non-indexed, flat-shaded).
+   * - Sharp front leading edge, wider lateral faces
+   * - Backward rake (spikes lean toward the tail)
+   * - Slight twist per ring for organic irregularity
+   * - seed parameter drives per-spike twist direction / shape variation
+   */
+  private finBlade(seed: number = 0): THREE.BufferGeometry {
+    const sides = 6;
+
+    // Asymmetric cross-section profile: [angle, radius_multiplier]
+    // Sharp front edge (angle 0 = +Z = toward head), wide sides, narrower trailing
+    const profile: [number, number][] = [
+      [0, 0.38],              // front center — sharp leading edge
+      [Math.PI * 0.33, 1.0],  // front-right — widest
+      [Math.PI * 0.72, 0.80], // mid-right
+      [Math.PI, 0.45],        // trailing center — narrower
+      [Math.PI * 1.28, 0.80], // mid-left
+      [Math.PI * 1.67, 1.0],  // front-left — widest
     ];
+
+    const baseRx = 0.042;  // lateral half-width at base
+    const baseRz = 0.034;  // front-back half-depth at base
+
+    // Height rings: positions, taper, backward rake, twist
+    const heights = [0, 0.14, 0.40, 0.70, 1.0];
+    const tapers  = [1.0, 0.80, 0.48, 0.20, 0.0];
+    const rakes   = [0, -0.025, -0.09, -0.19, -0.30];
+    const twists  = [0, 0.065, 0.15, 0.22, 0.28];
+
+    const twistSign = hash(seed * 13 + 3) > 0.5 ? 1 : -1;
+
+    // Build ring vertex positions
+    const rings: number[][] = [];
+    for (let h = 0; h < heights.length; h++) {
+      const ring: number[] = [];
+      if (tapers[h] === 0) {
+        // tip converges to a single point
+        ring.push(0, heights[h], rakes[h]);
+      } else {
+        for (let s = 0; s < sides; s++) {
+          const [a, rm] = profile[s];
+          const angle = a + twists[h] * twistSign;
+          const t = tapers[h];
+          const x = Math.sin(angle) * baseRx * rm * t;
+          const z = Math.cos(angle) * baseRz * rm * t + rakes[h];
+          ring.push(x, heights[h], z);
+        }
+      }
+      rings.push(ring);
+    }
+
     const pos: number[] = [];
-    const uv: number[] = [];
-    faces.forEach((f) =>
-      f.forEach((pt) => {
-        pos.push(pt[0], pt[1], pt[2]);
-        uv.push(pt[2] * 2 + 0.5, pt[1]);
-      })
-    );
+    const uvs: number[] = [];
+
+    // Build faces (non-indexed for faceted/flat shading per face)
+    for (let h = 0; h < heights.length - 1; h++) {
+      const lo = rings[h];
+      const hi = rings[h + 1];
+      const isTip = hi.length === 3;
+
+      for (let s = 0; s < sides; s++) {
+        const s0 = s * 3;
+        const s1 = ((s + 1) % sides) * 3;
+        if (isTip) {
+          // triangle fan to tip
+          pos.push(lo[s0], lo[s0 + 1], lo[s0 + 2]);
+          pos.push(lo[s1], lo[s1 + 1], lo[s1 + 2]);
+          pos.push(hi[0], hi[1], hi[2]);
+          uvs.push(s / sides, heights[h], (s + 1) / sides, heights[h], (s + 0.5) / sides, 1.0);
+        } else {
+          // quad → 2 triangles
+          pos.push(lo[s0], lo[s0 + 1], lo[s0 + 2]);
+          pos.push(lo[s1], lo[s1 + 1], lo[s1 + 2]);
+          pos.push(hi[s0], hi[s0 + 1], hi[s0 + 2]);
+          uvs.push(s / sides, heights[h], (s + 1) / sides, heights[h], s / sides, heights[h + 1]);
+          pos.push(lo[s1], lo[s1 + 1], lo[s1 + 2]);
+          pos.push(hi[s1], hi[s1 + 1], hi[s1 + 2]);
+          pos.push(hi[s0], hi[s0 + 1], hi[s0 + 2]);
+          uvs.push((s + 1) / sides, heights[h], (s + 1) / sides, heights[h + 1], s / sides, heights[h + 1]);
+        }
+      }
+    }
+
+    // base cap
+    for (let s = 0; s < sides; s++) {
+      const s0 = s * 3;
+      const s1 = ((s + 1) % sides) * 3;
+      pos.push(0, 0, rakes[0]);
+      pos.push(rings[0][s1], rings[0][s1 + 1], rings[0][s1 + 2]);
+      pos.push(rings[0][s0], rings[0][s0 + 1], rings[0][s0 + 2]);
+      uvs.push(0.5, 0, (s + 1) / sides, 0, s / sides, 0);
+    }
+
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-    g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+    g.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
     g.computeVertexNormals();
     return g;
   }
 
-  /* ---------------- sculpted head (head-local, all skinned to head bone) ---------------- */
+  /* ----------- lofted skull: continuous surface from back-of-skull to nose -------- */
+  /**
+   * Builds the main skull + snout as a single lofted mesh (no visible seams).
+   * 8 cross-section stations × 24 radial segments × 28 longitudinal rings.
+   * Each station has asymmetric width (rx), dorsal height (ryTop), ventral
+   * depth (ryBot), center Y offset, plus local brow/ridge modulations.
+   */
+  private buildSkullLoft(HEAD: number, radial: number, longRings: number): THREE.BufferGeometry {
+    // Cross-section stations from back of skull (t=0) to nose tip (t=1)
+    // Each station: [z, rx, ryTop, ryBot, centerY]
+    const stations: [number, number, number, number, number][] = [
+      [-0.22, 0.19, 0.21, 0.17, 0.025],  // back of skull
+      [-0.10, 0.26, 0.23, 0.19, 0.02],   // mid skull
+      [0.05,  0.29, 0.21, 0.21, 0.01],    // eye level / brow
+      [0.18,  0.22, 0.17, 0.18, 0.0],     // skull-snout junction
+      [0.32,  0.16, 0.13, 0.14, -0.01],   // upper snout
+      [0.44,  0.13, 0.10, 0.12, -0.015],  // mid snout
+      [0.55,  0.11, 0.085, 0.10, -0.01],  // lower snout
+      [0.62,  0.085, 0.065, 0.085, -0.005], // nose tip
+    ];
+
+    const verts = (longRings + 1) * (radial + 1);
+    const pos = new Float32Array(verts * 3);
+    const nrm = new Float32Array(verts * 3);
+    const uv = new Float32Array(verts * 2);
+    const idx: number[] = [];
+    let v = 0;
+
+    for (let i = 0; i <= longRings; i++) {
+      const t = i / longRings; // 0 = back, 1 = front
+
+      // interpolate station parameters
+      const stF = t * (stations.length - 1);
+      const stI = Math.min(stations.length - 2, Math.floor(stF));
+      const stW = stF - stI;
+      const sm = (a: number, b: number) => a + (b - a) * stW; // lerp shorthand
+      const z = sm(stations[stI][0], stations[stI + 1][0]);
+      let rx = sm(stations[stI][1], stations[stI + 1][1]);
+      let ryT = sm(stations[stI][2], stations[stI + 1][2]);
+      let ryB = sm(stations[stI][3], stations[stI + 1][3]);
+      const cy = sm(stations[stI][4], stations[stI + 1][4]);
+
+      // brow ridge modulation: widen laterally near the eye station (t≈0.25–0.4)
+      const browZone = Math.exp(-Math.pow((t - 0.3) * 6, 2));
+
+      // snout bridge ridge: slight dorsal bump along the snout (t > 0.4)
+      const bridgeT = sstep(0.35, 0.8, t);
+
+      for (let j = 0; j <= radial; j++) {
+        const th = (j / radial) * TAU;
+        const cx = Math.cos(th);
+        const sy = Math.sin(th);
+
+        // brow ridge bumps at ±45° angles
+        const browBump = browZone * 0.04 * Math.exp(-Math.pow((th - 0.8) * 2.2, 2))
+                       + browZone * 0.04 * Math.exp(-Math.pow((th - (TAU - 0.8)) * 2.2, 2));
+
+        // snout bridge (top, th ≈ π/2)
+        const bridgeBump = bridgeT * 0.012 * Math.exp(-Math.pow((th - Math.PI / 2) * 3, 2));
+
+        const localRx = rx + browBump;
+        const ry = sy > 0 ? ryT + bridgeBump : ryB;
+
+        const px = cx * localRx;
+        const py = sy * ry + cy;
+
+        pos[v * 3] = px;
+        pos[v * 3 + 1] = py;
+        pos[v * 3 + 2] = z;
+
+        // approximate normals
+        const invRx = 1 / Math.max(0.001, localRx);
+        const invRy = 1 / Math.max(0.001, ry);
+        const nnx = cx * invRx;
+        const nny = sy * invRy;
+        const nl = Math.hypot(nnx, nny) || 1;
+        nrm[v * 3] = nnx / nl;
+        nrm[v * 3 + 1] = nny / nl;
+        nrm[v * 3 + 2] = 0;
+
+        uv[v * 2] = t;
+        uv[v * 2 + 1] = j / radial;
+
+        if (i < longRings && j < radial) {
+          const a = i * (radial + 1) + j;
+          const b = a + radial + 1;
+          idx.push(a, b, a + 1, b, b + 1, a + 1);
+        }
+        v++;
+      }
+    }
+
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute("normal", new THREE.Float32BufferAttribute(nrm, 3));
+    g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+    g.setIndex(idx);
+
+    // add per-vertex color and skin
+    const col = new Float32Array(verts * 3);
+    const gold = new THREE.Color("#e3b95f");
+    const goldDeep = new THREE.Color("#c99b3f");
+    for (let i = 0; i < verts; i++) {
+      const pz = pos[i * 3 + 2];
+      const f = clamp((pz + 0.22) / 0.84, 0, 1); // 0 = back, 1 = nose
+      _c1.copy(gold).lerp(goldDeep, f * 0.6);
+      col[i * 3] = _c1.r;
+      col[i * 3 + 1] = _c1.g;
+      col[i * 3 + 2] = _c1.b;
+    }
+    g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+    setScalarAttr(g, "aU", 0.03);
+    setSkin(g, HEAD);
+    return g;
+  }
+
+  /* ------------- sculpted head: lofted skull + high-poly detail parts ------------- */
   private buildHeadGeometry(HEAD: number): THREE.BufferGeometry {
     const parts: THREE.BufferGeometry[] = [];
-    const gold = "#e3b95f";
     const goldDeep = "#c99b3f";
     const crimson = "#c9202c";
     const ivory = "#efe0bd";
 
-    // skull
-    parts.push(prep(new THREE.SphereGeometry(0.3, 18, 14), gold, 0.03, HEAD, mat4(0, 0.02, 0.05, 0, 0, 0, 1).multiply(mat4(0, 0, 0).multiply(new THREE.Matrix4().makeScale(0.92, 0.88, 1.28)))));
-    // elongated snout
-    const snout = new THREE.CylinderGeometry(0.115, 0.17, 0.46, 8, 1);
-    parts.push(prep(snout, goldDeep, 0.035, HEAD, mat4(0, 0.005, 0.4, Math.PI / 2, 0, 0).multiply(new THREE.Matrix4().makeScale(1.05, 0.72, 1))));
-    // nose plate + nostrils
-    parts.push(prep(new THREE.SphereGeometry(0.085, 10, 8), goldDeep, 0.04, HEAD, mat4(0, 0.045, 0.6).multiply(new THREE.Matrix4().makeScale(1.25, 0.7, 0.85))));
+    // continuous skull+snout loft (24 radial × 28 longitudinal = 725 verts indexed)
+    const skullLoft = this.buildSkullLoft(HEAD, 24, 28);
+    if (skullLoft.index) parts.push(skullLoft.toNonIndexed());
+    else parts.push(skullLoft);
+
+    // nose plate — higher segments (16×12, was 10×8)
+    parts.push(prep(new THREE.SphereGeometry(0.085, 16, 12), goldDeep, 0.04, HEAD,
+      mat4(0, 0.045, 0.6).multiply(new THREE.Matrix4().makeScale(1.25, 0.7, 0.85))));
+
+    // nostrils — higher segments (14×10, was 8×6)
     for (const s of [-1, 1]) {
-      parts.push(prep(new THREE.SphereGeometry(0.028, 8, 6), "#7a1016", 0.04, HEAD, mat4(s * 0.06, 0.022, 0.615)));
+      parts.push(prep(new THREE.SphereGeometry(0.028, 14, 10), "#7a1016", 0.04, HEAD,
+        mat4(s * 0.06, 0.022, 0.615)));
     }
-    // brow ridges
+
+    // brow ridges — replaced BoxGeometry with ellipsoid SphereGeometry for organic silhouette
     for (const s of [-1, 1]) {
-      parts.push(prep(new THREE.BoxGeometry(0.16, 0.075, 0.24), crimson, 0.03, HEAD, mat4(s * 0.15, 0.16, 0.16, -0.22, 0, s * 0.3)));
+      const browGeo = new THREE.SphereGeometry(0.08, 16, 12);
+      parts.push(prep(browGeo, crimson, 0.03, HEAD,
+        mat4(s * 0.15, 0.16, 0.16, -0.22, 0, s * 0.3).multiply(
+          new THREE.Matrix4().makeScale(1.8, 0.75, 1.4)
+        )));
     }
-    // nose hornlet
-    parts.push(prep(new THREE.ConeGeometry(0.032, 0.12, 6), ivory, 0.045, HEAD, mat4(0, 0.105, 0.5, -0.85, 0, 0)));
-    // cheek fins
+
+    // nose hornlet — higher segments (12, was 6)
+    parts.push(prep(new THREE.ConeGeometry(0.032, 0.12, 12), ivory, 0.045, HEAD,
+      mat4(0, 0.105, 0.5, -0.85, 0, 0)));
+
+    // cheek fins — now use multi-faceted spike with seed variation
     for (const s of [-1, 1]) {
-      const fin = this.finBlade();
+      const fin = this.finBlade(s > 0 ? 900 : 901);
       fin.scale(1, 0.22, 1);
       parts.push(prep(fin, crimson, 0.028, HEAD, mat4(s * 0.27, 0.0, 0.02, 0, 0, s * 1.35)));
     }
-    // deer antlers — main beam + two tines per side
+
+    // deer antlers — main beam + two tines per side (radial bumped 6→10)
     for (const s of [-1, 1]) {
       const beam = tubeAlong(
         [
@@ -717,7 +1050,7 @@ export class Dragon {
           new THREE.Vector3(s * 0.3, 0.6, -0.4),
           new THREE.Vector3(s * 0.4, 0.8, -0.66),
         ],
-        0.045, 0.012, 12, 6
+        0.045, 0.012, 16, 10
       );
       parts.push(prep(beam, ivory, 0.03, HEAD));
       const tine1 = tubeAlong(
@@ -726,7 +1059,7 @@ export class Dragon {
           new THREE.Vector3(s * 0.34, 0.52, -0.1),
           new THREE.Vector3(s * 0.47, 0.66, -0.16),
         ],
-        0.027, 0.009, 8, 6
+        0.027, 0.009, 10, 10
       );
       parts.push(prep(tine1, ivory, 0.03, HEAD));
       const tine2 = tubeAlong(
@@ -735,18 +1068,19 @@ export class Dragon {
           new THREE.Vector3(s * 0.46, 0.74, -0.34),
           new THREE.Vector3(s * 0.58, 0.88, -0.42),
         ],
-        0.024, 0.008, 8, 6
+        0.024, 0.008, 10, 10
       );
       parts.push(prep(tine2, ivory, 0.03, HEAD));
     }
-    // upper teeth — a visible row of carved points with two long fangs
+
+    // upper teeth — a visible row of carved points with two long fangs (10 segments, was 5)
     for (const s of [-1, 1]) {
       for (let i = 0; i < 5; i++) {
         const f = i / 4;
         const big = i === 0 ? 1.9 : lerp(1, 0.6, f);
         parts.push(
           prep(
-            new THREE.ConeGeometry(0.013 * big, 0.062 * big, 5),
+            new THREE.ConeGeometry(0.013 * big, 0.062 * big, 10),
             "#f5eedd",
             0.045,
             HEAD,
@@ -762,14 +1096,14 @@ export class Dragon {
 
   private buildJawGeometry(JAW: number): THREE.BufferGeometry {
     const parts: THREE.BufferGeometry[] = [];
-    const lip = new THREE.BoxGeometry(0.15, 0.06, 0.4);
+    const lip = new THREE.BoxGeometry(0.15, 0.06, 0.4, 2, 2, 4);
     parts.push(prep(lip, "#b4892f", 0.04, JAW, mat4(0, -0.155, 0.36, 0.06, 0, 0)));
     for (const s of [-1, 1]) {
       for (let i = 0; i < 4; i++) {
         const f = i / 3;
         parts.push(
           prep(
-            new THREE.ConeGeometry(0.011, 0.05, 5),
+            new THREE.ConeGeometry(0.011, 0.05, 10),
             "#f5eedd",
             0.045,
             JAW,
@@ -779,7 +1113,7 @@ export class Dragon {
       }
     }
     // chin spike beard
-    parts.push(prep(new THREE.ConeGeometry(0.04, 0.18, 6), "#efe0bd", 0.045, JAW, mat4(0, -0.22, 0.4, 2.7, 0, 0)));
+    parts.push(prep(new THREE.ConeGeometry(0.04, 0.18, 12), "#efe0bd", 0.045, JAW, mat4(0, -0.22, 0.4, 2.7, 0, 0)));
     return mergeGeometries(parts, false)!;
   }
 
@@ -809,10 +1143,14 @@ export class Dragon {
     }
 
     /* --- traveling-wave parameters (true sinusoidal locomotion) --- */
+    /* Reference: real eel/snake locomotion uses ~1.0–1.5 full waves along the body.
+       2.6 was too many, creating a jittery "wobble" rather than a smooth serpentine glide.
+       1.8 is a good mythical-dragon compromise. Amplitude tapers head→tail (biomechanically
+       correct: the head leads, the body follows with increasing displacement). */
     const baseAmp = reduced ? 0.012 : 0.075;
     const waveAmp = wake * (baseAmp + this.swimVel * 0.09) + (1 - wake) * (reduced ? 0 : 0.004);
-    const waves = 2.6;
-    const speed = reduced ? 0.25 : 2.1 + this.swimVel * 1.6;
+    const waves = 1.8;
+    const speed = reduced ? 0.25 : 1.7 + this.swimVel * 1.4;
     const flame = flameEnv(p);
 
     /* --- pose the body bones along the path --- */
@@ -828,13 +1166,15 @@ export class Dragon {
       this.curve.getTangent(u, zA).normalize();
 
       // sideways + vertical traveling wave, phase offset per segment
+      // amplitude tapers from near-zero at the head to full at the tail
       if (waveAmp > 0.0005) {
+        const ampTaper = 0.15 + 0.85 * u; // head ≈ 15%, tail ≈ 100%
         xA.crossVectors(zA, UP);
         if (xA.lengthSq() < 1e-5) xA.set(1, 0, 0);
         xA.normalize();
         const ph = u * waves * TAU;
-        pos.addScaledVector(xA, Math.sin(ph - time * speed) * waveAmp);
-        pos.y += Math.sin(ph * 0.72 - time * speed * 0.82 + 1.7) * waveAmp * 0.62;
+        pos.addScaledVector(xA, Math.sin(ph - time * speed) * waveAmp * ampTaper);
+        pos.y += Math.sin(ph * 0.72 - time * speed * 0.82 + 1.7) * waveAmp * 0.62 * ampTaper;
       }
 
       // parallel-transported up frame
@@ -851,10 +1191,12 @@ export class Dragon {
       const dtx = zA.x - tanPrevX, dty = zA.y - tanPrevY, dtz = zA.z - tanPrevZ;
       const bend = Math.sqrt(dtx * dtx + dty * dty + dtz * dtz);
       const bulge = clamp(bend * 0.9, 0, 0.09) * (1 - 0.5 * u);
+      // rest-only girth reduction: ring reads as a slim band, thickens as wake grows
+      const restGirth = lerp(0.60, 1.0, wake);
       const b = this.bodyBones[k];
       b.position.copy(pos);
       b.quaternion.copy(_q1);
-      b.scale.set(1 + bulge, 1 + bulge, 1 - bulge * 0.55);
+      b.scale.set((1 + bulge) * restGirth, (1 + bulge) * restGirth, 1 - bulge * 0.55);
       upPrev = _v5.copy(yA);
       tanPrevX = zA.x; tanPrevY = zA.y; tanPrevZ = zA.z;
     }
@@ -945,9 +1287,10 @@ export class Dragon {
     U.uTime.value = reduced ? time * 0.15 : time;
     U.uVanish.value = vanishT(p);
     // forged-smooth band at rest; full scale relief once the creature wakes
-    const ns = 0.2 + wake * 0.85;
+    // raised resting floor so etched-metal detail is visible even before animation
+    const ns = 0.35 + wake * 0.7;
     this.bodyMat.normalScale.set(ns, ns);
-    this.bodyMat.bumpScale = 0.04 + wake * 0.12;
+    this.bodyMat.bumpScale = 0.08 + wake * 0.1;
 
     /* gentle whole-body drift */
     if (!reduced) {
