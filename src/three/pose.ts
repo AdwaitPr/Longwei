@@ -65,28 +65,22 @@ export interface PoseParams {
 const segLen = 0.82;
 
 const KEYFRAMES: { at: number; pose: PoseParams }[] = [
-  // birth — head breaks from the top of the ring, diving down-back
-  { at: 0.02, pose: { origin: [0, 2.55, 0.4], yaw: 178, pitch: -52, coil: 1.2, yawAmp: 6.5, yawFreq: 1.0, yawPhase: 0.4, pitchAmp: 12, pitchFreq: 0.8, pitchPhase: 0 } },
-  // fully stretched S — swimming toward the first section
-  { at: 0.15, pose: { origin: [0.6, 3.2, 1.7], yaw: 192, pitch: -26, coil: -1.4, yawAmp: 8.5, yawFreq: 1.7, yawPhase: 1.3, pitchAmp: 14, pitchFreq: 1.1, pitchPhase: 0.8 } },
-  // ORIGINS — sweeps from the left, crosses between the two panels
-  { at: 0.26, pose: { origin: [-2.5, 3.1, 1.0], yaw: 158, pitch: -34, coil: 1.8, yawAmp: 7.5, yawFreq: 1.4, yawPhase: 2.1, pitchAmp: 16, pitchFreq: 1.0, pitchPhase: 2.4 } },
-  // INNOVATION — re-enters from the right, deeper
-  { at: 0.41, pose: { origin: [2.6, 2.9, -1.0], yaw: 203, pitch: -30, coil: -2.0, yawAmp: 8.0, yawFreq: 2.0, yawPhase: 4.1, pitchAmp: 13, pitchFreq: 1.3, pitchPhase: 1.0 } },
-  // ART — coils around the centre like a living border
-  { at: 0.565, pose: { origin: [0.2, 3.5, 2.3], yaw: 172, pitch: -24, coil: 2.8, yawAmp: 6.0, yawFreq: 1.1, yawPhase: 0.6, pitchAmp: 17, pitchFreq: 0.9, pitchPhase: 3.7 } },
-  // ARCHITECTURE — travels left, low and deep
-  { at: 0.7, pose: { origin: [-2.8, 2.7, -0.4], yaw: 188, pitch: -22, coil: -1.2, yawAmp: 7.0, yawFreq: 1.6, yawPhase: 5.1, pitchAmp: 12, pitchFreq: 1.1, pitchPhase: 2.0 } },
-  // FLAME — head rears up, facing the viewer
-  { at: 0.7680, pose: { origin: [-0.7, 1.7, 2.8], yaw: 181, pitch: 14, coil: 0.6, yawAmp: 5.0, yawFreq: 1.4, yawPhase: 3.0, pitchAmp: 13, pitchFreq: 0.75, pitchPhase: 4.4 } },
-  // FESTIVALS — widest, most celebratory swirl
-  { at: 0.845, pose: { origin: [0.9, 3.3, 1.4], yaw: 166, pitch: -32, coil: -2.4, yawAmp: 9.0, yawFreq: 2.2, yawPhase: 0.9, pitchAmp: 15, pitchFreq: 1.2, pitchPhase: 2.2 } },
-  // PRE-DIVE — banks toward the deep centre, already aligning with the tunnel
-  { at: 0.905, pose: { origin: [-2.2, 2.1, -1.2], yaw: 38, pitch: -18, coil: 2.0, yawAmp: 6.0, yawFreq: 1.6, yawPhase: 1.6, pitchAmp: 12, pitchFreq: 1.0, pitchPhase: 0.5 } },
-  // DIVE — straightens into an arrow aimed at the wormhole
-  { at: 0.952, pose: { origin: [0.0, 0.75, -5.0], yaw: 4, pitch: 5, coil: 0, yawAmp: 1.6, yawFreq: 1.1, yawPhase: 0, pitchAmp: 2.0, pitchFreq: 0.9, pitchPhase: 0 } },
-  // ENTERED — nose inside the tunnel
-  { at: 1.0, pose: { origin: [0.0, 0.5, -7.0], yaw: 2, pitch: 3, coil: 0, yawAmp: 1.0, yawFreq: 1.0, yawPhase: 0, pitchAmp: 1.5, pitchFreq: 0.9, pitchPhase: 0 } },
+  // birth - head breaks from the top of the ring
+  { at: 0.02, pose: { origin: [0, 2.55, 0.4], yaw: 178, pitch: -30, coil: 2.0, yawAmp: 4.0, yawFreq: 1.0, yawPhase: 0, pitchAmp: 8, pitchFreq: 1.0, pitchPhase: 0 } },
+  // first spiral turn, slightly down
+  { at: 0.20, pose: { origin: [2.5, 2.0, 0.0], yaw: 90, pitch: -20, coil: 2.0, yawAmp: 4.0, yawFreq: 1.0, yawPhase: 1, pitchAmp: 8, pitchFreq: 1.0, pitchPhase: 1 } },
+  // second spiral turn, back and down
+  { at: 0.40, pose: { origin: [0.0, 1.5, -2.5], yaw: 0, pitch: -20, coil: 2.0, yawAmp: 4.0, yawFreq: 1.0, yawPhase: 2, pitchAmp: 8, pitchFreq: 1.0, pitchPhase: 2 } },
+  // third spiral turn, left and down
+  { at: 0.60, pose: { origin: [-2.5, 1.0, 0.0], yaw: -90, pitch: -20, coil: 2.0, yawAmp: 4.0, yawFreq: 1.0, yawPhase: 3, pitchAmp: 8, pitchFreq: 1.0, pitchPhase: 3 } },
+  // fourth spiral turn, front and down
+  { at: 0.80, pose: { origin: [0.0, 0.5, 2.0], yaw: -180, pitch: -20, coil: 2.0, yawAmp: 4.0, yawFreq: 1.0, yawPhase: 4, pitchAmp: 8, pitchFreq: 1.0, pitchPhase: 4 } },
+  // PRE-DIVE - aligning towards tunnel
+  { at: 0.905, pose: { origin: [0.0, 0.3, -2.0], yaw: 0, pitch: -10, coil: 1.0, yawAmp: 2.0, yawFreq: 1.0, yawPhase: 0, pitchAmp: 4, pitchFreq: 1.0, pitchPhase: 0 } },
+  // DIVE
+  { at: 0.952, pose: { origin: [0.0, 0.18, -6.0], yaw: 0, pitch: 0, coil: 0.0, yawAmp: 0.0, yawFreq: 1.0, yawPhase: 0, pitchAmp: 0, pitchFreq: 1.0, pitchPhase: 0 } },
+  // ENTERED
+  { at: 1.0, pose: { origin: [0.0, 0.18, -9.0], yaw: 0, pitch: 0, coil: 0.0, yawAmp: 0.0, yawFreq: 1.0, yawPhase: 0, pitchAmp: 0, pitchFreq: 1.0, pitchPhase: 0 } },
 ];
 
 const _h = new THREE.Vector3();
