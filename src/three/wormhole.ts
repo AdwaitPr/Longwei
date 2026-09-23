@@ -47,25 +47,31 @@ export class Wormhole {
           return sin(y * 46.0 + ang * 3.0 - t);
         }
         void main() {
+          // Increase twist based on spin (progress), making the space look more warped as dragon approaches
+          float twist = vUv.y * (15.0 + uSpin * 10.0);
           float t = uTime * (0.55 + uSpin * 2.4);
-          float ang = vUv.x * 6.2831 + vUv.y * 15.0 + sin(vUv.y * 8.0 - uTime * 0.6) * 0.5;
+          float ang = vUv.x * 6.2831 + twist + sin(vUv.y * 10.0 - uTime * 1.2) * 0.8;
           // chromatic ring samples
           float r0 = rings(ang, vUv.y, t * 3.0);
           float rR = rings(ang + 0.06, vUv.y, t * 3.0);
           float rB = rings(ang - 0.06, vUv.y, t * 3.0);
           float band = sin(vUv.y * 12.0 - uTime * 0.9 + ang * 0.5) * 0.5 + 0.5;
-          vec3 lacquer = vec3(0.16, 0.02, 0.04);
-          vec3 crimson = vec3(0.75, 0.12, 0.14);
-          vec3 gold = vec3(1.0, 0.72, 0.28);
-          vec3 jade = vec3(0.16, 0.55, 0.4);
+          vec3 lacquer = vec3(0.12, 0.01, 0.05); // deeper shadow
+          vec3 crimson = vec3(0.85, 0.15, 0.20); // brighter crimson
+          vec3 gold = vec3(1.0, 0.8, 0.4);       // more intense gold
+          vec3 jade = vec3(0.2, 0.8, 0.6);       // more vibrant jade
+          vec3 deepSpace = vec3(0.02, 0.0, 0.1); // contextual deep space color near the throat
           vec3 col = mix(lacquer, crimson, smoothstep(-0.4, 0.9, r0));
           col = mix(col, gold, smoothstep(0.55, 1.0, r0) * 0.85);
           col.r += (rR - r0) * 0.25;
           col.b += (rB - r0) * 0.25;
           col += jade * pow(band, 6.0) * 0.5;
-          // light intensifies toward the deep throat
+          // blend towards deep space at the throat
+          float throat = smoothstep(0.4, 0.0, vUv.y);
+          col = mix(col, deepSpace, throat * 0.8);
+          // light intensifies toward the deep throat but pulses more
           float depth = smoothstep(1.0, 0.15, vUv.y);
-          col *= 0.35 + depth * 1.35;
+          col *= 0.35 + depth * (1.35 + sin(uTime * 3.0 + vUv.y * 10.0) * 0.2);
           float a = uOpacity * (0.5 + 0.5 * smoothstep(-1.0, 1.0, r0));
           a *= smoothstep(0.0, 0.12, vUv.y) * smoothstep(1.0, 0.86, vUv.y);
           gl_FragColor = vec4(col * a, a);
@@ -226,8 +232,10 @@ export class Wormhole {
     (this.mouthGlow.material as THREE.SpriteMaterial).opacity = vis * 0.6;
     this.coreGlow.scale.setScalar(6.4 + Math.sin(time * 1.2) * 0.5 + t * 1.6);
     if (!reduced) {
-      this.ringA.rotation.z = time * 0.25 * (0.5 + spin);
-      this.ringB.rotation.z = time * -0.18 * (0.5 + spin);
+      // Exponentially increase rotation speed as the dragon gets closer (t increases)
+      const speedMult = 0.5 + spin + Math.pow(t, 2.0) * 4.0;
+      this.ringA.rotation.z = time * 0.25 * speedMult;
+      this.ringB.rotation.z = time * -0.18 * speedMult;
     }
     this.group.visible = t > 0.001;
   }
